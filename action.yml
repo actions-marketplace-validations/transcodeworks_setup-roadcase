@@ -1,0 +1,57 @@
+name: Setup roadcase
+description: >-
+  Installs roadcase, which packages, signs and updates Rust desktop
+  applications, and the tools its releases need on Linux, macOS and Windows.
+author: Transcode Inc.
+branding:
+  icon: package
+  color: orange
+
+inputs:
+  version:
+    description: >-
+      The roadcase version to install: `latest`, or a version such as `0.1.0`
+      or `v0.1.0`.
+    required: false
+    default: latest
+  token:
+    description: >-
+      A GitHub token, used only to ask GitHub for the latest release and to
+      verify the build provenance attestation. The workflow's own token is
+      enough.
+    required: false
+    default: ${{ github.token }}
+  verify-attestation:
+    description: >-
+      Verify the archive's build provenance attestation with the GitHub CLI,
+      and fail when it is not valid. Where `gh` is not installed, the action
+      warns and continues on the SHA-256 alone.
+    required: false
+    default: "true"
+  tools:
+    description: >-
+      Also install what `roadcase release` needs on this system: appimagetool
+      and the AppImage runtime on Linux, NSIS on Windows, nothing on macOS.
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: The roadcase version installed, without a leading `v`.
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: The folder that holds the `roadcase` program, which is added to `PATH`.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install roadcase
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_VERIFY_ATTESTATION: ${{ inputs.verify-attestation }}
+        INPUT_TOOLS: ${{ inputs.tools }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh"

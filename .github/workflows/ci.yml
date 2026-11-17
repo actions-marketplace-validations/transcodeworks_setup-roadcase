@@ -1,0 +1,149 @@
+name: CI
+
+# Every pull request and every push to main, and once a week (a new roadcase
+# release or a runner image must not break `version: latest` unnoticed): the
+# action itself, from this checkout, on each system and architecture roadcase
+# is released for; and the lints of the script and the workflows.
+#
+# No job reads a secret, so a pull request from a fork runs them all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck comes with the runner's image.
+      - name: shellcheck
+        run: shellcheck install.sh
+      - name: actionlint
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 5 --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --quiet
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+  # The action as a workflow uses it, with its defaults: the latest roadcase,
+  # its attestation verified, and the system's tools.
+  action:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: linux
+          - runner: ubuntu-24.04-arm
+            system: linux
+          - runner: macos-15
+            system: macos
+          - runner: macos-15-intel
+            system: macos
+          - runner: windows-2025
+            system: windows
+    name: action (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup roadcase
+        id: setup
+        uses: ./
+      - name: The outputs name what was installed
+        env:
+          VERSION: ${{ steps.setup.outputs.version }}
+          FOLDER: ${{ steps.setup.outputs.path }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::the output version is '$VERSION'"; exit 1; }
+          [ -f "$FOLDER/roadcase" ] || [ -f "$FOLDER/roadcase.exe" ] || { echo "::error::the output path, '$FOLDER', holds no roadcase"; exit 1; }
+          [ "$(roadcase --version)" = "roadcase $VERSION" ] || { echo "::error::roadcase on PATH is '$(roadcase --version)', not $VERSION"; exit 1; }
+      - name: roadcase reads a config
+        run: roadcase check --system linux --config test/fixture/roadcase.toml
+      # The same from the system's other shell, which reads PATH as the runner
+      # wrote it.
+      - name: roadcase runs from PowerShell
+        if: matrix.system == 'windows'
+        shell: pwsh
+        run: roadcase --version
+      - name: makensis is on PATH
+        if: matrix.system == 'windows'
+        run: makensis -VERSION
+      - name: The AppImage tools are where the environment says
+        if: matrix.system == 'linux'
+        run: |
+          [ -x "$APPIMAGETOOL" ] && [ -f "$APPIMAGE_RUNTIME" ] && [ "$APPIMAGE_EXTRACT_AND_RUN" = 1 ]
+          command -v appimagetool
+      - name: An AppImage is made with them, and runs
+        if: matrix.system == 'linux'
+        run: |
+          image=$(roadcase release linux --format appimage --skip-build \
+            --config test/fixture/roadcase.toml --out "$RUNNER_TEMP/fixture")
+          [ "$(basename "$image")" = "Fixture-1.0.0-$(uname -m).AppImage" ]
+          [ "$("$image")" = "hello from the fixture" ]
+
+  # A named version, with a leading v, and nothing but roadcase itself.
+  action-options:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup roadcase
+        id: setup
+        uses: ./
+        with:
+          version: v0.1.0
+          verify-attestation: false
+          tools: false
+      - name: That version is installed, and no tools
+        env:
+          VERSION: ${{ steps.setup.outputs.version }}
+        run: |
+          [ "$VERSION" = 0.1.0 ] && [ "$(roadcase --version)" = "roadcase 0.1.0" ]
+          [ -z "${APPIMAGETOOL:-}" ] && [ -z "${APPIMAGE_RUNTIME:-}" ]
+
+  # The one check a merge waits for: it fails if a job failed or was
+  # cancelled.
+  ci-ok:
+    if: always()
+    needs: [lint, action, action-options]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          jq -e '[.[] | select(.result != "success" and .result != "skipped")] | length == 0' <<<"$NEEDS" > /dev/null || {
+            echo "::error::A job failed or was cancelled."
+            exit 1
+          }

@@ -1,0 +1,17 @@
+# The smallest application roadcase can package, for this repository's own
+# checks: `roadcase check` on every system, and an AppImage on Linux.
+[app]
+name = "Setup Fixture"
+id = "com.example.setup-fixture"
+version = "1.0.0"
+
+[linux]
+icons = ["icon.png"]
+categories = ["Utility"]
+comment = "The application setup-roadcase's checks package"
+
+[linux.executable]
+from = "hello"
+
+[linux.appimage]
+name = "Fixture-{version}-{arch}.AppImage"
