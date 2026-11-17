@@ -1,7 +1,5 @@
 name: Setup roadcase
-description: >-
-  Installs roadcase, which packages, signs and updates Rust desktop
-  applications, and the tools its releases need on Linux, macOS and Windows.
+description: Install roadcase and the tools it needs to package, sign and update Rust desktop apps.
 author: Transcode Inc.
 branding:
   icon: package
